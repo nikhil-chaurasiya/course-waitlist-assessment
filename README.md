@@ -1,110 +1,135 @@
-# Course Waitlist — AI-Assisted Engineering Assessment
+# Course Waitlist API — AI-Assisted Engineering Assessment
 
-A small Java 21 and Spring Boot REST API implementing enrollment, dropping, prerequisite validation, and FIFO waitlist promotion for a single course offering.
+A REST API built with Java 21 and Spring Boot for managing course enrollment, prerequisite validation, enrollment drops, and FIFO waitlist promotion for a single course offering.
 
+## Technologies
 
-
-## Technologies Used
-
-- **Java 21** — primary programming language
+- **Java 21** — programming language
 - **Spring Boot 3.4.5** — application framework
-- **Spring Web** — REST API endpoints
-- **Spring Data JPA** — database access and repository operations
+- **Spring Web** — REST API development
+- **Spring Data JPA** — persistence and data access
 - **H2 Database** — in-memory relational database
-- **Maven** — dependency management and build
- 
+- **Maven** — build and dependency management
+- **JUnit 5 and Spring Boot Test** — automated testing
 
-## Run the application
+## Prerequisites
 
-From the project root, run:
+Ensure Java 21 and Maven are installed and available in your terminal.
 
+Verify your environment:
+
+```bash
+java -version
+mvn -version
+```
+
+## Getting Started
+
+### Run the application
+
+From the project root, execute:
+
+```bash
 mvn spring-boot:run
+```
 
+The application starts locally on port `8080`, unless configured otherwise. It uses an in-memory H2 database, so application data is not intended to persist after shutdown.
 
-The application uses an in-memory H2 database. Data is not intended to persist after the application stops.
+### Run automated tests
 
-### H2 Console
+Execute the test suite from the project root:
 
-Open:
+```bash
+mvn test
+```
 
-http://localhost:8080/h2-console
+## Database Console
 
-Use these connection settings:
+While the application is running, open the H2 Console:
+
+[http://localhost:8080/h2-console](http://localhost:8080/h2-console)
+
+Use the following connection settings:
 
 | Setting | Value |
 |---|---|
-| JDBC URL | jdbc:h2:mem:coursewaitlist;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE |
-| User Name | sa |
-| Password | 12345 |
+| JDBC URL | `jdbc:h2:mem:coursewaitlist;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE` |
+| User Name | `sa` |
+| Password | `12345` |
 
+These settings correspond to the application's local configuration.
 
+## API Usage
 
-
-## Run tests
-
-From the project root:
-
-mvn test
-
-
-
-## API examples
-
-The examples below assume the application is running locally. The course ID in subsequent requests must match the ID returned when you create a course.
-
+The examples below assume that the application is running on `http://localhost:8080`. Use the course ID returned by the create-course request in subsequent requests. The examples use course ID `1` for illustration.
 
 ### 1. Create a course offering
 
-
+```bash
 curl -X POST http://localhost:8080/api/courses \
   -H 'Content-Type: application/json' \
   -d '{"name":"Distributed Systems","capacity":2}'
-  
+```
+
+Creates a course offering with a capacity of two learners.
 
 ### 2. Enroll a learner or join the waitlist
 
-
+```bash
 curl -X POST http://localhost:8080/api/courses/1/enrollments \
   -H 'Content-Type: application/json' \
   -d '{"learnerId":"alice","prerequisiteSatisfied":true}'
+```
 
+An eligible learner is enrolled when a seat is available. If the course is full, the learner is added to the waitlist.
 
-If a course has an available seat, an eligible learner can be enrolled. If the course is full, an eligible learner can be added to the waitlist.
+The `prerequisiteSatisfied` field represents the prerequisite status supplied by the caller.
 
+### 3. Retrieve course information
 
-
-### 3. Inspect the course
-
+```bash
 curl http://localhost:8080/api/courses/1
+```
 
-Use the response to inspect the course state and registration counts exposed by the API.
-
+Retrieves the course information and registration state exposed by the API.
 
 ### 4. Drop an enrollment
 
+```bash
+curl -X DELETE \
+  http://localhost:8080/api/courses/1/enrollments/alice
+```
 
-curl -X DELETE http://localhost:8080/api/courses/1/enrollments/alice
+Dropping an existing enrollment frees a seat and triggers promotion of the earliest eligible learner in the waitlist, if one is available.
 
-A successful drop should free a seat and trigger promotion of the earliest eligible learner in the waitlist, if one exists.
+## Business Rules and Design Decisions
 
+- **Capacity:** Enrollment is limited to the capacity configured when a course offering is created.
+- **Duplicate prevention:** A learner cannot be enrolled or waitlisted more than once for the same course offering.
+- **Prerequisites:** Learners who do not satisfy the prerequisite are rejected rather than enrolled or newly waitlisted.
+- **FIFO promotion:** Waitlist promotion follows creation order, using the creation timestamp and database-generated ID as a tie-breaker.
+- **Eligibility during promotion:** Ineligible queued entries are skipped and retained. The service continues searching for the earliest eligible learner.
+- **Transactional consistency:** Enrollment and drop workflows use transactions and a pessimistic lock on the course row. Database uniqueness constraints provide additional protection against duplicate records.
 
+## Scope and Assumptions
 
-## Scope and assumptions
+This implementation focuses on enrollment, drop handling, prerequisite validation, and waitlist promotion for a single course offering.
 
-- The service manages one course offering per request. Capacity is set when the offering is created.
-- The caller supplies the learner ID and prerequisite-satisfaction flag. Authentication, identity management, and a learner/course catalog are outside this assessment's scope.
-- A learner must not be enrolled or waitlisted more than once for the same course offering.
-- A learner who does not satisfy the prerequisite is rejected rather than enrolled or newly waitlisted.
-- Waitlist promotion follows FIFO order, using creation timestamp and database-generated ID as a tie-breaker.
-- During promotion, an ineligible queued entry is skipped and retained in its existing position; the service continues looking for the earliest eligible learner.
-- Enrollment and drop workflows use a transaction and a pessimistic lock on the course row. Database uniqueness constraints provide additional protection against duplicate records.
-- H2 is used as a local in-memory database. This is a prototype, not a production persistence configuration.
+The following are outside the assessment's scope:
 
+- Authentication and identity management
+- A learner or course catalog integration
+- A frontend or user interface
+- Payments and external prerequisite services
+- Pagination and deployment configuration
 
+The API accepts the learner ID and prerequisite-satisfaction flag from the caller. It does not independently authenticate the learner or verify prerequisite status against an external system.
 
-## Limitations and follow-up risks
+## Limitations and Production Considerations
 
-- The prerequisite flag is supplied by the API caller. A production system should determine eligibility using a trusted source rather than trusting a client-provided boolean.
-- Concurrency behavior should be tested against the intended production database before production use. The presence of a lock does not by itself prove correctness under every database or deployment configuration.
-- The application does not include authentication, a frontend, pagination, an external prerequisite service, or deployment configuration because these are outside the assessment's core scope.
-- Automated test claims should be based on the actual output of `mvn test`; manual API checks are useful but do not replace automated tests.
+- **Eligibility validation:** A production implementation should determine prerequisite eligibility using a trusted source rather than relying on a client-provided boolean.
+- **Persistence:** H2 is configured as an in-memory database for local execution and assessment purposes.
+- **Concurrency:** The application uses transactional locking, but concurrency behavior should be validated against the intended production database and deployment configuration before production use.
+- **Integration testing:** Automated tests provide evidence for the scenarios they exercise; they do not establish correctness for every database, deployment, or failure condition.
+
+This project is an assessment implementation, not a production-ready enrollment
