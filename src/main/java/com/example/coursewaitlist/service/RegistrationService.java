@@ -78,7 +78,6 @@ public class RegistrationService {
                 enrollments.save(new Enrollment(entry.getCourse(), entry.getLearnerId()));
                 return entry.getLearnerId();
             }
-            // Policy: retain an ineligible entry in its original position and inspect later entries.
         }
         return null;
     }
