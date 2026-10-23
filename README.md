@@ -2,10 +2,17 @@
 
 A small Java 21 and Spring Boot REST API implementing enrollment, dropping, prerequisite validation, and FIFO waitlist promotion for a single course offering.
 
-## Requirements
 
-- Java 21
-- Maven 3.9+
+
+## Technologies Used
+
+- **Java 21** — primary programming language
+- **Spring Boot 3.4.5** — application framework
+- **Spring Web** — REST API endpoints
+- **Spring Data JPA** — database access and repository operations
+- **H2 Database** — in-memory relational database
+- **Maven** — dependency management and build
+ 
 
 ## Run the application
 
