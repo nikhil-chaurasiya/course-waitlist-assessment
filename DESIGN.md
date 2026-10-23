@@ -12,15 +12,17 @@ This service implements the registration workflow for a single course offering:
 
 The implementation deliberately excludes authentication, a course catalog, a frontend, payment processing, and external prerequisite integrations.
 
-## 2. Service architecture
+## 2. Service Architecture
 
 `RegistrationController` exposes the HTTP API and delegates registration decisions to `RegistrationService`.
 
-`RegistrationService` coordinates the enrollment, drop, and waitlist-promotion workflows. Spring Data repositories persist course offerings, enrollments, and waitlist entries.
+`RegistrationService` coordinates enrollment, dropping, and waitlist promotion. Spring Data repositories persist course offerings, enrollments, and waitlist entries.
 
-The relational data store enforces uniqueness constraints, while service-level validation and transaction boundaries protect the registration workflow.
+The relational database enforces uniqueness constraints, while service-level validation and transaction boundaries protect registration workflows.
 
-## 3. Data model
+The implementation follows a layered architecture, uses the Repository pattern for persistence access, and uses dependency injection to connect application components.
+
+## 3. Data Model
 
 ### `CourseOffering`
 
@@ -40,18 +42,18 @@ Represents a learner waiting for a seat and contains a course-offering reference
 
 A unique constraint on `(course_id, learner_id)` prevents duplicate waitlist records for the same learner and offering.
 
-The service must also ensure that a learner is not simultaneously enrolled and waitlisted for the same offering.
+The service also ensures that a learner is not simultaneously enrolled and waitlisted for the same offering.
 
-## 4. API surface
+## 4. API Surface
 
 - `POST /api/courses` — create a course offering.
 - `GET /api/courses/{courseId}` — inspect a course offering and the registration information exposed by the API.
 - `POST /api/courses/{courseId}/enrollments` — enroll an eligible learner or add them to the waitlist when the course is full.
 - `DELETE /api/courses/{courseId}/enrollments/{learnerId}` — drop an enrollment and attempt waitlist promotion.
 
-The enrollment request uses `learnerId` and `prerequisiteSatisfied`. The caller supplies these values in this prototype; a production service should derive identity and prerequisite eligibility from trusted systems.
+The enrollment request uses `learnerId` and `prerequisiteSatisfied`. The caller supplies these values in this prototype. A production service should derive identity and prerequisite eligibility from trusted systems.
 
-## 5. Business rules and invariants
+## 5. Business Rules and Invariants
 
 1. The enrollment count must never exceed course capacity.
 2. A learner may have at most one active enrollment per offering.
@@ -62,7 +64,7 @@ The enrollment request uses `learnerId` and `prerequisiteSatisfied`. The caller 
 7. A successful drop and any resulting promotion must be handled atomically.
 8. A promotion must not exceed the available course capacity.
 
-## 6. Waitlist and prerequisite policy
+## 6. Waitlist and Prerequisite Policy
 
 Eligible learners are considered in FIFO order. Waitlist entries are ordered by creation timestamp, with the database-generated entry ID used as a tie-breaker.
 
@@ -73,19 +75,27 @@ When a seat becomes available, the service scans the waitlist in that order:
 3. If the learner is ineligible, skip that entry without deleting it and continue to the next entry.
 4. If no eligible entry is found, leave the seat available.
 
-The API rejects a learner who fails the prerequisite check when they initially attempt to register. Retaining an ineligible queued entry is a separate policy for an entry whose eligibility later changes or whose stored eligibility is updated by another trusted process.
+The API rejects a learner who fails the prerequisite check when they initially attempt to register.
 
-## 7. Transactions and concurrency
+The prerequisite-satisfaction flag is captured when a learner joins the waitlist. The current implementation does not provide a mechanism to refresh or update eligibility later. During promotion, the service uses the stored flag: ineligible entries are skipped and retained, while the earliest eligible entry is promoted.
+
+## 7. Transactions and Concurrency
 
 Enrollment and drop workflows acquire a pessimistic write lock on the course row inside a transaction before reading registration state and applying changes.
 
 This is intended to serialize registration operations for the same course offering and protect capacity checks and drop/promotion updates from conflicting writes.
 
-Database uniqueness constraints provide additional safeguards against duplicate rows. Concurrency correctness should still be verified with focused concurrent tests and against the intended production database before deployment.
+Database uniqueness constraints provide additional safeguards against duplicate records.
 
-## 8. Trade-offs and limitations
+A focused concurrent-enrollment test submits six eligible learner requests against a course with capacity one. It verifies that exactly one learner is enrolled and the remaining five learners are waitlisted.
 
-- H2 in-memory storage keeps local setup simple, but data does not provide durable persistence across application restarts.
+This test provides evidence for the tested H2 configuration and scenario. Concurrency behavior should still be validated against the intended production database before production use.
+
+## 8. Trade-offs and Limitations
+
+- H2 in-memory storage keeps local setup simple, but data is not durable across application restarts.
 - Prerequisite eligibility is represented by a request field rather than a trusted eligibility service.
-- The design is limited to the registration workflow required for this assessment.
+- The implementation is limited to the registration workflow required for this assessment.
+- The current application does not refresh prerequisite eligibility for existing waitlist entries.
+- The automated tests focus on service-level behavior; separate HTTP-layer integration tests have not been verified.
 - Production readiness would require further validation of concurrency behavior, error handling, observability, persistence, and integration with trusted identity and prerequisite systems.
