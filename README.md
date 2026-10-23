@@ -1,54 +1,103 @@
 # Course Waitlist — AI-Assisted Engineering Assessment
 
-A deliberately small Java 21 / Spring Boot REST service implementing one course offering's enrollment, drop, and FIFO waitlist promotion workflow.
+A small Java 21 and Spring Boot REST API implementing enrollment, dropping, prerequisite validation, and FIFO waitlist promotion for a single course offering.
 
 ## Requirements
+
 - Java 21
 - Maven 3.9+
 
-## Run
-```bash
-mvn spring-boot:run
-```
-The app uses an in-memory H2 database; data is reset when the application process stops. H2 console: `http://localhost:8080/h2-console` (JDBC URL `jdbc:h2:mem:coursewaitlist`, username `sa`, blank password).
+## Run the application
 
-## Test
-```bash
+From the project root, run:
+
+mvn spring-boot:run
+
+
+The application uses an in-memory H2 database. Data is not intended to persist after the application stops.
+
+### H2 Console
+
+Open:
+
+http://localhost:8080/h2-console
+
+Use these connection settings:
+
+| Setting | Value |
+|---|---|
+| JDBC URL | jdbc:h2:mem:coursewaitlist;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE |
+| User Name | sa |
+| Password | 12345 |
+
+
+
+
+## Run tests
+
+From the project root:
+
 mvn test
-```
+
+
 
 ## API examples
-Create an offering:
-```bash
+
+The examples below assume the application is running locally. The course ID in subsequent requests must match the ID returned when you create a course.
+
+
+### 1. Create a course offering
+
+
 curl -X POST http://localhost:8080/api/courses \
   -H 'Content-Type: application/json' \
   -d '{"name":"Distributed Systems","capacity":2}'
-```
-Enroll (or join waitlist if full):
-```bash
+  
+
+### 2. Enroll a learner or join the waitlist
+
+
 curl -X POST http://localhost:8080/api/courses/1/enrollments \
   -H 'Content-Type: application/json' \
   -d '{"learnerId":"alice","prerequisiteSatisfied":true}'
-```
-Inspect capacity and counts:
-```bash
+
+
+If a course has an available seat, an eligible learner can be enrolled. If the course is full, an eligible learner can be added to the waitlist.
+
+
+
+### 3. Inspect the course
+
 curl http://localhost:8080/api/courses/1
-```
-Drop and trigger promotion:
-```bash
+
+Use the response to inspect the course state and registration counts exposed by the API.
+
+
+### 4. Drop an enrollment
+
+
 curl -X DELETE http://localhost:8080/api/courses/1/enrollments/alice
-```
+
+A successful drop should free a seat and trigger promotion of the earliest eligible learner in the waitlist, if one exists.
+
+
 
 ## Scope and assumptions
-- One offering per request, with a capacity set when the offering is created.
-- The caller supplies the learner identifier and whether the prerequisite is satisfied. Identity management and a learner/course catalog are outside this assessment's scope.
-- A learner may be enrolled or waitlisted at most once per offering. Database unique constraints reinforce this invariant.
-- An ineligible learner is rejected before enrollment or waitlisting. If a queued learner is later considered ineligible, promotion skips that entry but retains it in its existing position and continues to the next eligible entry.
-- FIFO is determined by waitlist creation timestamp, with the database-generated entry ID as a stable tie-breaker.
-- Every enrollment/drop workflow locks the course row inside a transaction so operations for the same offering serialize. Enrollment and waitlist uniqueness constraints are additional safeguards.
-- H2 is an in-memory database for the assessment; persistence across restarts is not provided.
 
-## Limitations / follow-up risks
-- The request's prerequisite flag is a small assessment boundary, not a production authorization or prerequisite-verification system.
-- Concurrency behavior should be exercised against the target database as well as H2 before production use. This project includes a pessimistic course-row lock, but does not claim a cross-database concurrency test.
-- No authentication, pagination, course catalog, frontend, deployment, or external prerequisite service is included because these are outside the requested scope.
+- The service manages one course offering per request. Capacity is set when the offering is created.
+- The caller supplies the learner ID and prerequisite-satisfaction flag. Authentication, identity management, and a learner/course catalog are outside this assessment's scope.
+- A learner must not be enrolled or waitlisted more than once for the same course offering.
+- A learner who does not satisfy the prerequisite is rejected rather than enrolled or newly waitlisted.
+- Waitlist promotion follows FIFO order, using creation timestamp and database-generated ID as a tie-breaker.
+- During promotion, an ineligible queued entry is skipped and retained in its existing position; the service continues looking for the earliest eligible learner.
+- Enrollment and drop workflows use a transaction and a pessimistic lock on the course row. Database uniqueness constraints provide additional protection against duplicate records.
+- H2 is used as a local in-memory database. This is a prototype, not a production persistence configuration.
+
+
+
+## Limitations and follow-up risks
+
+- The prerequisite flag is supplied by the API caller. A production system should determine eligibility using a trusted source rather than trusting a client-provided boolean.
+- Concurrency behavior should be tested against the intended production database before production use. The presence of a lock does not by itself prove correctness under every database or deployment configuration.
+- The application does not include authentication, a frontend, pagination, an external prerequisite service, or deployment configuration because these are outside the assessment's core scope.
+- Automated test claims should be based on the actual output of `mvn test`; manual API checks are useful but do not replace automated tests.
