@@ -1,33 +1,91 @@
 # Design Specification
 
-## Service boundary
-`RegistrationController` exposes REST endpoints and delegates all workflow decisions to `RegistrationService`. The service coordinates persistence through Spring Data repositories. The database stores course offerings, enrollments, and waitlist entries.
+## 1. Scope
 
-## Data model
-- `CourseOffering`: ID, name, positive capacity.
-- `Enrollment`: offering reference, learner ID, creation time; unique `(course_id, learner_id)`.
-- `WaitlistEntry`: offering reference, learner ID, prerequisite status captured at request time, creation time; unique `(course_id, learner_id)`.
+This service implements the registration workflow for a single course offering:
 
-The caller supplies learner ID and prerequisite status to keep the prototype bounded; a real system would derive eligibility from trusted learner/course records.
+- Create a course offering with a fixed capacity.
+- Enroll an eligible learner when a seat is available.
+- Add an eligible learner to the waitlist when the course is full.
+- Drop an existing enrollment and promote the earliest eligible waitlisted learner when possible.
+- Prevent duplicate registration records and enforce prerequisite eligibility.
 
-## API
-- `POST /api/courses` — create an offering.
-- `GET /api/courses/{courseId}` — inspect capacity and counts.
-- `POST /api/courses/{courseId}/enrollments` — enroll or waitlist an eligible learner.
-- `DELETE /api/courses/{courseId}/enrollments/{learnerId}` — drop an enrollment and promote one eligible learner if possible.
+The implementation deliberately excludes authentication, a course catalog, a frontend, payment processing, and external prerequisite integrations.
 
-## Invariants
-1. Enrollment count never exceeds offering capacity.
-2. A learner cannot be both enrolled and waitlisted for the same offering, nor have duplicate rows in either table.
-3. Prerequisite failure never creates an enrollment or a new waitlist entry.
-4. Dropping a learner who is not enrolled changes no registration state.
-5. Successful drop and waitlist promotion occur in one transaction.
+## 2. Service architecture
 
-## Promotion policy
-Waitlist entries are read in ascending creation timestamp and then ascending ID. Promotion scans in FIFO order, promotes the first eligible entry, removes that entry from the waitlist, and stops after one promotion. Ineligible entries are skipped but retained in their original queue position. The current API rejects ineligible learners at initial enrollment; the retention rule covers eligibility becoming false after queue entry or persisted data from an external eligibility source.
+`RegistrationController` exposes the HTTP API and delegates registration decisions to `RegistrationService`.
 
-## Persistence and concurrency
-H2 is used for a simple local relational store. Enrollment and drop acquire a pessimistic write lock on the course row before reading counts or mutating state. The transaction keeps the drop and promotion atomic. Unique database constraints protect against duplicate enrollment/waitlist records. A production database should be tested under concurrent load and configured with appropriate lock timeouts and transaction monitoring.
+`RegistrationService` coordinates the enrollment, drop, and waitlist-promotion workflows. Spring Data repositories persist course offerings, enrollments, and waitlist entries.
 
-## Tradeoffs
-The prototype deliberately has no user identity system, learner catalog, frontend, or policy engine. Eligibility is a request field to keep the task scoped to the required service slice. The database is in-memory, so data does not survive process restart.
+The relational data store enforces uniqueness constraints, while service-level validation and transaction boundaries protect the registration workflow.
+
+## 3. Data model
+
+### `CourseOffering`
+
+Represents a course offering and includes its identifier, name, and capacity.
+
+Capacity must be positive. The number of enrolled learners must never exceed capacity.
+
+### `Enrollment`
+
+Represents an active enrollment and contains a course-offering reference, learner ID, and creation timestamp.
+
+A unique constraint on `(course_id, learner_id)` prevents duplicate enrollment records for the same learner and offering.
+
+### `WaitlistEntry`
+
+Represents a learner waiting for a seat and contains a course-offering reference, learner ID, prerequisite status captured at request time, and creation timestamp.
+
+A unique constraint on `(course_id, learner_id)` prevents duplicate waitlist records for the same learner and offering.
+
+The service must also ensure that a learner is not simultaneously enrolled and waitlisted for the same offering.
+
+## 4. API surface
+
+- `POST /api/courses` — create a course offering.
+- `GET /api/courses/{courseId}` — inspect a course offering and the registration information exposed by the API.
+- `POST /api/courses/{courseId}/enrollments` — enroll an eligible learner or add them to the waitlist when the course is full.
+- `DELETE /api/courses/{courseId}/enrollments/{learnerId}` — drop an enrollment and attempt waitlist promotion.
+
+The enrollment request uses `learnerId` and `prerequisiteSatisfied`. The caller supplies these values in this prototype; a production service should derive identity and prerequisite eligibility from trusted systems.
+
+## 5. Business rules and invariants
+
+1. The enrollment count must never exceed course capacity.
+2. A learner may have at most one active enrollment per offering.
+3. A learner may have at most one waitlist entry per offering.
+4. A learner must not be both enrolled and waitlisted for the same offering.
+5. A learner who fails the prerequisite check must not be enrolled or newly added to the waitlist.
+6. Dropping a learner who is not currently enrolled must not change registration state.
+7. A successful drop and any resulting promotion must be handled atomically.
+8. A promotion must not exceed the available course capacity.
+
+## 6. Waitlist and prerequisite policy
+
+Eligible learners are considered in FIFO order. Waitlist entries are ordered by creation timestamp, with the database-generated entry ID used as a tie-breaker.
+
+When a seat becomes available, the service scans the waitlist in that order:
+
+1. Check the earliest queued entry.
+2. If the learner is eligible, remove the waitlist entry, create the enrollment, and stop after one promotion.
+3. If the learner is ineligible, skip that entry without deleting it and continue to the next entry.
+4. If no eligible entry is found, leave the seat available.
+
+The API rejects a learner who fails the prerequisite check when they initially attempt to register. Retaining an ineligible queued entry is a separate policy for an entry whose eligibility later changes or whose stored eligibility is updated by another trusted process.
+
+## 7. Transactions and concurrency
+
+Enrollment and drop workflows acquire a pessimistic write lock on the course row inside a transaction before reading registration state and applying changes.
+
+This is intended to serialize registration operations for the same course offering and protect capacity checks and drop/promotion updates from conflicting writes.
+
+Database uniqueness constraints provide additional safeguards against duplicate rows. Concurrency correctness should still be verified with focused concurrent tests and against the intended production database before deployment.
+
+## 8. Trade-offs and limitations
+
+- H2 in-memory storage keeps local setup simple, but data does not provide durable persistence across application restarts.
+- Prerequisite eligibility is represented by a request field rather than a trusted eligibility service.
+- The design is limited to the registration workflow required for this assessment.
+- Production readiness would require further validation of concurrency behavior, error handling, observability, persistence, and integration with trusted identity and prerequisite systems.
